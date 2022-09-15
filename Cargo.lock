@@ -1162,19 +1162,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust_voip_client"
-version = "0.1.0"
-dependencies = [
- "bincode",
- "eframe",
- "egui",
- "rand",
- "rust-ini",
- "serde",
- "tokio",
-]
-
-[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1452,6 +1439,19 @@ name = "version_check"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
+
+[[package]]
+name = "voip_client"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "eframe",
+ "egui",
+ "rand",
+ "rust-ini",
+ "serde",
+ "tokio",
+]
 
 [[package]]
 name = "walkdir"
