@@ -15,6 +15,8 @@ use std::sync::mpsc::Receiver;
 use std::sync::mpsc::TryRecvError;
 
 const CHAT_MAX_SIZE: usize = 10;
+const ADDR: &str = "188.166.39.246";
+//const ADDR: &str = "127.0.0.1";
 
 #[derive(Default, Debug)]
 pub struct Client {
@@ -108,12 +110,11 @@ impl eframe::App for App {
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {  
         let (tx, rx) = mpsc::channel::<String>(); 
-
         if !self.client.inited { 
             self.client = init_user();
             self.client.rx.insert(rx);
 
-            let signal_stream = TcpStream::connect("127.0.0.1:8083")
+            let signal_stream = TcpStream::connect(format!("{}:8083", ADDR).as_str())
                 .expect("Can't connect to main_stream"); 
 
             //Inting channelpool
@@ -141,7 +142,7 @@ impl eframe::App for App {
                     Err(TryRecvError::Empty) => { },
                     Err(TryRecvError::Disconnected) => panic!("Channel disconnected"),
                 } 
-                sleep(Duration::from_millis(100));
+                //sleep(Duration::from_millis(100));
             });
         };
         
@@ -351,7 +352,7 @@ impl eframe::App for App {
                         self.client.connection.as_ref().unwrap()
                         .write(msg).expect("Cant write jostain syystä");
                         self.client.connection.as_ref().unwrap().flush().unwrap();
-                        self.chat_text.clear();  
+                        self.chat_text.clear(); 
                 }
             });
             ui.allocate_ui_with_layout(Vec2 {x: (ui.available_width() - 15.0), y: 25.0}, 
@@ -453,7 +454,7 @@ fn init_user() -> Client {
         .take(30)
         .map(char::from)
         .collect();
-    let main_stream = TcpStream::connect("127.0.0.1:8082")
+    let main_stream = TcpStream::connect(format!("{}:8082", ADDR).as_str())
         .expect("Can't connect to main_stream");
     client.connection = Some(main_stream); 
     
@@ -482,7 +483,8 @@ fn connect_to_channel(client: &mut Client, channel: &mut Channel) {
     println!("sended: {:?} bytes", &serialized.capacity());
 
     signal_server(client.connection.as_mut().unwrap(), "CONNECT");
-    let chat_stream = TcpStream::connect("127.0.0.1:8081").expect("Can't connect to main_stream"); 
+    let chat_stream = TcpStream::connect(format!("{}:8081", ADDR).as_str())
+        .expect("Can't connect to main_stream"); 
     
     let buf = format!("{} {} {}{}", channel.id, client.username, client.id, "\n");
     let buf = buf.as_bytes();
