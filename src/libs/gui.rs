@@ -14,11 +14,15 @@ use std::sync::mpsc::{self};
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::TryRecvError;
 
-const CHAT_MAX_SIZE: usize = 10;
-const ADDR: &str = "188.166.39.246";
-//const ADDR: &str = "127.0.0.1";
+use cpal::{Stream};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use ringbuf::RingBuffer;
 
-#[derive(Default, Debug)]
+const CHAT_MAX_SIZE: usize = 10;
+//const ADDR: &str = "188.166.39.246";
+const ADDR: &str = "127.0.0.1";
+
+#[derive(Default)]
 pub struct Client {
     id: String,
     inited: bool,
@@ -29,7 +33,9 @@ pub struct Client {
     //signal_connection: Option<TcpStream>,
     username: String,
     channelpool: Vec<Channel>, 
-    rx: Option<Receiver<String>>,
+    rx: Option<Receiver<String>>, 
+    input_stream: Option<Stream>,
+    output_stream: Option<Stream>,
 }
 impl Client {
     fn new() -> Client {
@@ -49,6 +55,8 @@ impl Client {
             username: String::new(),
             channelpool: Vec::new(), 
             rx: None,
+            input_stream: None,
+            output_stream: None,
         }
     }
 }
@@ -85,7 +93,7 @@ struct App {
     username_text: String,
     join_channel_text: String,
     current_channel_text: String,
-    connect_window: bool,
+    connect_window: bool, 
 }
 
 impl App {
@@ -110,12 +118,19 @@ impl eframe::App for App {
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {  
         let (tx, rx) = mpsc::channel::<String>(); 
+        let (tx_sample, rx_sample) = mpsc::channel::<f32>();
+
+        //inits
         if !self.client.inited { 
             self.client = init_user();
             self.client.rx.insert(rx);
 
             let signal_stream = TcpStream::connect(format!("{}:8083", ADDR).as_str())
                 .expect("Can't connect to main_stream"); 
+            let audio_tx_stream = TcpStream::connect(format!("{}:8081", ADDR).as_str())
+                .expect("Can't connect to main_stream"); 
+            let audio_rx_stream = TcpStream::connect(format!("{}:8084", ADDR).as_str())
+            .expect("Can't connect to main_stream"); 
 
             //Inting channelpool
             let conf = Ini::load_from_file("conf.ini").unwrap();
@@ -144,9 +159,65 @@ impl eframe::App for App {
                 } 
                 //sleep(Duration::from_millis(100));
             });
+
+            let host = cpal::default_host();
+            let input_device = host.default_input_device().expect("no input device available");
+            let output_device = host.default_output_device().expect("no output device available");
+
+            println!("Using input device: \"{}\"", input_device.name().unwrap());
+            println!("Using output device: \"{}\"", output_device.name().unwrap());
+
+            let config: cpal::StreamConfig = input_device.default_input_config().unwrap().into();
+
+            let buffer = RingBuffer::new(1000);
+            let (mut prod, mut cons) = buffer.split();
+
+
+            let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                for &sample in data {
+                    tx_sample.send(sample).unwrap();
+                }
+            };
+
+            let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                for sample in data {
+                    *sample = match cons.pop() {
+                        Some(s) => s,
+                        None => { 0.0 }
+                    };
+                }   
+            };
+
+            let input_stream = input_device.build_input_stream(&config, input_data_fn, err_fn).unwrap();
+            let output_stream = output_device.build_output_stream(&config, output_data_fn, err_fn).unwrap();
+            println!("Successfully built streams.");
+
+            self.client.input_stream.insert(input_stream);
+            self.client.output_stream.insert(output_stream);
+
+            std::thread::spawn(move || loop {
+                let mut writer = BufWriter::new(audio_tx_stream.try_clone().unwrap());
+                let mut sample = rx_sample.recv().unwrap().to_string();
+                sample.push('\n');
+                let sample_bytes = sample.as_bytes();
+                writer.write(&sample_bytes).unwrap();
+            });
+
+            std::thread::spawn(move || loop {
+                let mut reader = BufReader::new(audio_rx_stream.try_clone().unwrap());
+                let mut sample = String::new();
+                reader.read_line(&mut sample).unwrap();
+                sample.pop();
+                let sample = sample.parse::<f32>().unwrap();
+                prod.push(sample); 
+            });
+            
+            fn err_fn(err: cpal::StreamError) {
+                eprintln!("an error occurred on stream: {}", err);
+            }
         };
-        
-        if !self.client.chat_connection.is_none() {
+
+        if self.client.connected {
             ctx.request_repaint();
             let received = self.client.rx.as_ref().unwrap().try_recv();
             match received {
@@ -262,6 +333,8 @@ impl eframe::App for App {
                                 if ui.button(" Disconnect ").clicked() {
                                     signal_server(self.client.connection.as_mut().unwrap(), "DISCONNECT"); 
                                     disconnect(&mut self.client);
+                                    self.client.input_stream.as_ref().unwrap().pause();
+                                    self.client.output_stream.as_ref().unwrap().pause();
                                 }
                             } else {
                                 if ui.button("  Connect  ").clicked() {  
@@ -286,6 +359,9 @@ impl eframe::App for App {
                                     }
                                     connect_to_channel(&mut self.client, &mut channel);
                                     ctx.request_repaint(); 
+
+                                    //self.client.input_stream.as_ref().unwrap().play().unwrap();  
+                                    
                                     self.toggle_connection_window();
                                 };
                             } 
@@ -298,19 +374,23 @@ impl eframe::App for App {
                     //Connection button
                     if ui.button("Connect").clicked() {
                         ui.close_menu();
-                        println!("{:#?}", self.client);
+                        //println!("{:#?}", self.client);
                         self.toggle_connection_window(); 
                     }
                     //Disconnection button
                     if ui.add_enabled(self.client.connected, egui::Button::new("Disconnect")).clicked() {
                         signal_server(self.client.connection.as_mut().unwrap(), "DISCONNECT"); 
                         disconnect(&mut self.client);
+                        self.client.input_stream.as_ref().unwrap().pause();
+                        self.client.output_stream.as_ref().unwrap().pause();
                         ui.close_menu();
                     }
                     //Quit button
                     if ui.button("Quit").clicked() {
                         signal_server(self.client.connection.as_mut().unwrap(), "DISCONNECT"); 
                         disconnect(&mut self.client);
+                        self.client.input_stream.as_ref().unwrap().pause();
+                        self.client.output_stream.as_ref().unwrap().pause();
                         eframe::Frame::quit(frame);
                     }
                 });
@@ -422,6 +502,8 @@ impl eframe::App for App {
     fn on_exit(&mut self, _gl: &eframe::glow::Context) { 
         signal_server(self.client.connection.as_mut().unwrap(), "DISCONNECT"); 
         disconnect(&mut self.client);
+        self.client.input_stream.as_ref().unwrap().pause();
+        self.client.output_stream.as_ref().unwrap().pause();
         let mut conf = Ini::load_from_file("conf.ini").unwrap();
         let mut num = 1;
         conf.delete(Some("Channels"));
@@ -483,8 +565,10 @@ fn connect_to_channel(client: &mut Client, channel: &mut Channel) {
     println!("sended: {:?} bytes", &serialized.capacity());
 
     signal_server(client.connection.as_mut().unwrap(), "CONNECT");
-    let chat_stream = TcpStream::connect(format!("{}:8081", ADDR).as_str())
-        .expect("Can't connect to main_stream"); 
+    // let chat_stream = TcpStream::connect(format!("{}:8081", ADDR).as_str())
+    //     .expect("Can't connect to main_stream"); 
+    // client.chat_connection = Some(chat_stream);
+    sleep(Duration::from_millis(150));
     
     let buf = format!("{} {} {}{}", channel.id, client.username, client.id, "\n");
     let buf = buf.as_bytes();
@@ -497,11 +581,11 @@ fn connect_to_channel(client: &mut Client, channel: &mut Channel) {
     let deserialized: Vec<Message> = bincode::deserialize(&buf).unwrap(); 
     channel.chat_msgs.insert(deserialized);
     
-    client.chat_connection = Some(chat_stream);
+    
     client.connected = true;
     client.connected_to = channel.clone();
 
-    println!("channel {:#?}", channel);
+    //println!("channel {:#?}", channel);
 }
 
 fn disconnect(client: &mut Client) { 
@@ -579,13 +663,22 @@ fn update_channel_users(client: &mut Client) {
     for c in &mut client.channelpool {
         if client.connected_to.id.contains(&c.id) {
             c.users.replace(deserialized);
+            if c.users.as_ref().unwrap().len() > 1 {
+                println!("len: {}", c.users.as_ref().unwrap().len());
+                client.input_stream.as_ref().unwrap().play().unwrap(); 
+                client.output_stream.as_ref().unwrap().play().unwrap();
+            } else {
+                println!("len: {}", c.users.as_ref().unwrap().len());
+                client.input_stream.as_ref().unwrap().pause().unwrap(); 
+                client.output_stream.as_ref().unwrap().pause().unwrap();
+            }
             break;
         }
-    }  
+    } 
 }
 
 fn signal_server(stream: &mut TcpStream, signal: &str) {
-    let mut writer = std::io::BufWriter::new(stream);
+    let mut writer = BufWriter::new(stream);
     let mut msg = String::from(signal);
     msg.push('\n');
     println!("sending signal.... = {:#?}", msg);
@@ -610,3 +703,4 @@ fn catch_signal(stream: &TcpStream) -> String {
     });
     rx
 }
+
