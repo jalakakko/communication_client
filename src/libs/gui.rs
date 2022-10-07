@@ -5,7 +5,7 @@ use eframe::{egui};
 use egui::{menu, style::Margin, Vec2, Color32};
 use ini::Ini;
 use serde::{Serialize, Deserialize};
-use bincode;
+use bincode::{self, serialize};
 use rand::{Rng, thread_rng};
 use rand::distributions::Alphanumeric;
 use std::thread::sleep as sleep;
@@ -118,7 +118,7 @@ impl eframe::App for App {
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {  
         let (tx, rx) = mpsc::channel::<String>(); 
-        let (tx_sample, rx_sample) = mpsc::channel::<f32>();
+        let (tx_sample, rx_sample) = mpsc::channel();
 
         //inits
         if !self.client.inited { 
@@ -167,15 +167,21 @@ impl eframe::App for App {
             println!("Using input device: \"{}\"", input_device.name().unwrap());
             println!("Using output device: \"{}\"", output_device.name().unwrap());
 
-            let config: cpal::StreamConfig = input_device.default_input_config().unwrap().into();
+            let input_config: cpal::StreamConfig = input_device.default_input_config().unwrap().into();
+            let output_config: cpal::StreamConfig = output_device.default_output_config().unwrap().into();
 
-            let buffer = RingBuffer::new(1000);
+            let buffer = RingBuffer::new(44000);
             let (mut prod, mut cons) = buffer.split();
 
-
             let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                for &sample in data {
-                    tx_sample.send(sample).unwrap();
+                let mut samples = vec![];
+                for &sample in data { 
+                    samples.push(sample);
+                    if samples.len() >= 960 {
+                        let a = samples.to_vec();
+                        tx_sample.send(a).unwrap();
+                        samples.clear();
+                    }
                 }
             };
 
@@ -188,8 +194,8 @@ impl eframe::App for App {
                 }   
             };
 
-            let input_stream = input_device.build_input_stream(&config, input_data_fn, err_fn).unwrap();
-            let output_stream = output_device.build_output_stream(&config, output_data_fn, err_fn).unwrap();
+            let input_stream = input_device.build_input_stream(&input_config, input_data_fn, err_fn).unwrap();
+            let output_stream = output_device.build_output_stream(&output_config, output_data_fn, err_fn).unwrap();
             println!("Successfully built streams.");
 
             self.client.input_stream.insert(input_stream);
@@ -197,19 +203,19 @@ impl eframe::App for App {
 
             std::thread::spawn(move || loop {
                 let mut writer = BufWriter::new(audio_tx_stream.try_clone().unwrap());
-                let mut sample = rx_sample.recv().unwrap().to_string();
-                sample.push('\n');
-                let sample_bytes = sample.as_bytes();
-                writer.write(&sample_bytes).unwrap();
+                let samples = rx_sample.recv().unwrap();
+                let serialized = bincode::serialize(&samples).unwrap();
+                writer.write(&serialized).unwrap();
             });
 
             std::thread::spawn(move || loop {
                 let mut reader = BufReader::new(audio_rx_stream.try_clone().unwrap());
-                let mut sample = String::new();
-                reader.read_line(&mut sample).unwrap();
-                sample.pop();
-                let sample = sample.parse::<f32>().unwrap();
-                prod.push(sample); 
+                let mut samples = vec![0; 4000];
+                reader.read(&mut samples).unwrap();
+                let deserialized: Vec<f32> = bincode::deserialize(&samples).unwrap();
+                for i in deserialized {
+                    prod.push(i);
+                }
             });
             
             fn err_fn(err: cpal::StreamError) {
@@ -234,13 +240,12 @@ impl eframe::App for App {
                         self.client.connection.as_ref().unwrap().write(&serialized).unwrap();
                         self.client.connection.as_ref().unwrap().flush().unwrap();
 
-                        //lukee uudet viestit
+                        // Reads new messages
                         let mut buf = vec![0; 100000];
                         self.client.connection.as_ref().unwrap().read(&mut buf).unwrap();
                         let mut deserialized: Vec<Message> = bincode::deserialize(&buf).unwrap();
-                       // println!("de: {:#?}", deserialized);
 
-                        //vertaa viimeisimpien viestejen id:itä ja että viestit ei ole None
+                        // Compares latest msg id's and that msgs are not None
                         if !deserialized.is_empty() {
                             if !self.client.connected_to.chat_msgs.as_ref().unwrap().is_empty() {
                                 if !deserialized.last().unwrap().id.contains (
@@ -252,7 +257,7 @@ impl eframe::App for App {
                             }
                         }
 
-                        // poistaa vanhimman viestin
+                        // Removes the oldest msg
                         println!("chat msgs len: {}", self.client.connected_to.chat_msgs.as_mut().unwrap().len());
                         if self.client.connected_to.chat_msgs.as_ref().unwrap().len() > CHAT_MAX_SIZE {
                             self.client.connected_to.chat_msgs.as_mut().unwrap().remove(0);
@@ -359,9 +364,6 @@ impl eframe::App for App {
                                     }
                                     connect_to_channel(&mut self.client, &mut channel);
                                     ctx.request_repaint(); 
-
-                                    //self.client.input_stream.as_ref().unwrap().play().unwrap();  
-                                    
                                     self.toggle_connection_window();
                                 };
                             } 
@@ -374,7 +376,6 @@ impl eframe::App for App {
                     //Connection button
                     if ui.button("Connect").clicked() {
                         ui.close_menu();
-                        //println!("{:#?}", self.client);
                         self.toggle_connection_window(); 
                     }
                     //Disconnection button
@@ -565,9 +566,6 @@ fn connect_to_channel(client: &mut Client, channel: &mut Channel) {
     println!("sended: {:?} bytes", &serialized.capacity());
 
     signal_server(client.connection.as_mut().unwrap(), "CONNECT");
-    // let chat_stream = TcpStream::connect(format!("{}:8081", ADDR).as_str())
-    //     .expect("Can't connect to main_stream"); 
-    // client.chat_connection = Some(chat_stream);
     sleep(Duration::from_millis(150));
     
     let buf = format!("{} {} {}{}", channel.id, client.username, client.id, "\n");
@@ -575,7 +573,7 @@ fn connect_to_channel(client: &mut Client, channel: &mut Channel) {
     client.connection.as_ref().unwrap().write(buf).unwrap();
     client.connection.as_ref().unwrap().flush().unwrap();
 
-    //Read deserialized chat messages
+    // Reads deserialized chat messages
     let mut buf = vec![0; 100000];
     client.connection.as_ref().unwrap().read(&mut buf).unwrap();
     let deserialized: Vec<Message> = bincode::deserialize(&buf).unwrap(); 
@@ -584,8 +582,6 @@ fn connect_to_channel(client: &mut Client, channel: &mut Channel) {
     
     client.connected = true;
     client.connected_to = channel.clone();
-
-    //println!("channel {:#?}", channel);
 }
 
 fn disconnect(client: &mut Client) { 
