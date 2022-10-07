@@ -19,8 +19,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use ringbuf::RingBuffer;
 
 const CHAT_MAX_SIZE: usize = 10;
-//const ADDR: &str = "188.166.39.246";
-const ADDR: &str = "127.0.0.1";
+const ADDR: &str = "188.166.39.246";
+//const ADDR: &str = "127.0.0.1";
 
 #[derive(Default)]
 pub struct Client {
@@ -176,6 +176,7 @@ impl eframe::App for App {
             let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
                 let mut samples = vec![];
                 for &sample in data { 
+                    let sample = sample.to_le_bytes();
                     samples.push(sample);
                     if samples.len() >= 960 {
                         let a = samples.to_vec();
@@ -203,7 +204,7 @@ impl eframe::App for App {
 
             std::thread::spawn(move || loop {
                 let mut writer = BufWriter::new(audio_tx_stream.try_clone().unwrap());
-                let samples = rx_sample.recv().unwrap();
+                let samples = rx_sample.recv().unwrap(); 
                 let serialized = bincode::serialize(&samples).unwrap();
                 writer.write(&serialized).unwrap();
             });
@@ -212,9 +213,10 @@ impl eframe::App for App {
                 let mut reader = BufReader::new(audio_rx_stream.try_clone().unwrap());
                 let mut samples = vec![0; 4000];
                 reader.read(&mut samples).unwrap();
-                let deserialized: Vec<f32> = bincode::deserialize(&samples).unwrap();
-                for i in deserialized {
-                    prod.push(i);
+                let deserialized: Vec<[u8; 4]> = bincode::deserialize(&samples).unwrap();
+                for b in deserialized {
+                    let a = f32::from_le_bytes(b);
+                    prod.push(a);
                 }
             });
             
