@@ -17,10 +17,11 @@ use std::sync::mpsc::TryRecvError;
 use cpal::{Stream};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use ringbuf::RingBuffer;
+use byteorder::{ByteOrder, LittleEndian};
 
 const CHAT_MAX_SIZE: usize = 10;
-const ADDR: &str = "188.166.39.246";
-//const ADDR: &str = "127.0.0.1";
+// const ADDR: &str = "188.166.39.246";
+const ADDR: &str = "127.0.0.1";
 
 #[derive(Default)]
 pub struct Client {
@@ -157,7 +158,6 @@ impl eframe::App for App {
                     Err(TryRecvError::Empty) => { },
                     Err(TryRecvError::Disconnected) => panic!("Channel disconnected"),
                 } 
-                //sleep(Duration::from_millis(100));
             });
 
             let host = cpal::default_host();
@@ -170,17 +170,23 @@ impl eframe::App for App {
             let input_config: cpal::StreamConfig = input_device.default_input_config().unwrap().into();
             let output_config: cpal::StreamConfig = output_device.default_output_config().unwrap().into();
 
-            let buffer = RingBuffer::new(44000);
+            let buffer = RingBuffer::new(96000);
             let (mut prod, mut cons) = buffer.split();
 
+            let mut package = vec![];
             let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
                 let mut samples = vec![];
-                for &sample in data { 
-                    let sample = sample.to_le_bytes();
+                for &sample in data {  
+                    let sample = (sample * 100000.0).round() / 100000.0;
                     samples.push(sample);
                     if samples.len() >= 960 {
-                        let a = samples.to_vec();
-                        tx_sample.send(a).unwrap();
+                        let mut a = samples.to_vec();
+                        package.append(&mut a);
+                        if package.len() >= 48000 {
+                            let b = package.to_vec();
+                            tx_sample.send(b).unwrap();
+                            package.clear();
+                        }
                         samples.clear();
                     }
                 }
@@ -188,7 +194,7 @@ impl eframe::App for App {
 
             let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                 for sample in data {
-                    *sample = match cons.pop() {
+                    *sample = match cons.pop() { 
                         Some(s) => s,
                         None => { 0.0 }
                     };
@@ -204,19 +210,20 @@ impl eframe::App for App {
 
             std::thread::spawn(move || loop {
                 let mut writer = BufWriter::new(audio_tx_stream.try_clone().unwrap());
-                let samples = rx_sample.recv().unwrap(); 
-                let serialized = bincode::serialize(&samples).unwrap();
+                let samples: Vec<f32> = rx_sample.recv().unwrap();
+                let serialized = bincode::serialize(&samples).unwrap(); 
                 writer.write(&serialized).unwrap();
             });
 
             std::thread::spawn(move || loop {
                 let mut reader = BufReader::new(audio_rx_stream.try_clone().unwrap());
-                let mut samples = vec![0; 4000];
+                let mut samples = vec![0; 192008];
                 reader.read(&mut samples).unwrap();
-                let deserialized: Vec<[u8; 4]> = bincode::deserialize(&samples).unwrap();
-                for b in deserialized {
-                    let a = f32::from_le_bytes(b);
-                    prod.push(a);
+                println!("{:?}", samples.len());
+                
+                let deserialized: Vec<f32> = bincode::deserialize(&samples).unwrap(); 
+                for d in deserialized {  
+                    prod.push(d);
                 }
             });
             
