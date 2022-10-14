@@ -17,11 +17,11 @@ use std::sync::mpsc::TryRecvError;
 use cpal::{Stream};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use ringbuf::RingBuffer;
-use byteorder::{ByteOrder, LittleEndian};
+use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 
 const CHAT_MAX_SIZE: usize = 10;
-// const ADDR: &str = "188.166.39.246";
-const ADDR: &str = "127.0.0.1";
+//const ADDR: &str = "188.166.39.246";
+//const ADDR: &str = "127.0.0.1";
 
 #[derive(Default)]
 pub struct Client {
@@ -158,6 +158,7 @@ impl eframe::App for App {
                     Err(TryRecvError::Empty) => { },
                     Err(TryRecvError::Disconnected) => panic!("Channel disconnected"),
                 } 
+                //sleep(Duration::from_millis(100));
             });
 
             let host = cpal::default_host();
@@ -170,23 +171,33 @@ impl eframe::App for App {
             let input_config: cpal::StreamConfig = input_device.default_input_config().unwrap().into();
             let output_config: cpal::StreamConfig = output_device.default_output_config().unwrap().into();
 
+            println!("Using input config: \"{:#?}\"", input_config);
+
             let buffer = RingBuffer::new(96000);
             let (mut prod, mut cons) = buffer.split();
 
-            let mut package = vec![];
+            let mut i = 0;
+            let mut j = 0;
+            let mut k = 0;
+
+            //let mut package = vec![];
             let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
                 let mut samples = vec![];
                 for &sample in data {  
-                    let sample = (sample * 100000.0).round() / 100000.0;
                     samples.push(sample);
                     if samples.len() >= 960 {
                         let mut a = samples.to_vec();
-                        package.append(&mut a);
-                        if package.len() >= 48000 {
-                            let b = package.to_vec();
-                            tx_sample.send(b).unwrap();
-                            package.clear();
-                        }
+                        tx_sample.send(a).unwrap();
+                        k += 1;
+                        println!("K: {}", k);
+                        // package.append(&mut a);
+                        // if package.len() >= 96000 {
+                        //     let b = package.to_vec();
+                        //     tx_sample.send(b).unwrap();
+                        //     k += 1;
+                        //     println!("K: {}", k);
+                        //     package.clear();
+                        // }
                         samples.clear();
                     }
                 }
@@ -207,19 +218,22 @@ impl eframe::App for App {
 
             self.client.input_stream.insert(input_stream);
             self.client.output_stream.insert(output_stream);
-
+            
             std::thread::spawn(move || loop {
                 let mut writer = BufWriter::new(audio_tx_stream.try_clone().unwrap());
                 let samples: Vec<f32> = rx_sample.recv().unwrap();
                 let serialized = bincode::serialize(&samples).unwrap(); 
                 writer.write(&serialized).unwrap();
+                i += 1;
+                println!("i: {}", i);
             });
 
             std::thread::spawn(move || loop {
                 let mut reader = BufReader::new(audio_rx_stream.try_clone().unwrap());
-                let mut samples = vec![0; 192008];
+                let mut samples = vec![0; 4000];
                 reader.read(&mut samples).unwrap();
-                println!("{:?}", samples.len());
+                j += 1;
+                println!("j: {}", j);
                 
                 let deserialized: Vec<f32> = bincode::deserialize(&samples).unwrap(); 
                 for d in deserialized {  
