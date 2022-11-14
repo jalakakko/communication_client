@@ -1,5 +1,5 @@
 [package]
-name = "voip_client"
+name = "communication_client"
 version = "0.1.0"
 edition = "2021"
 
@@ -13,6 +13,3 @@ rust-ini = "0.18.0"
 serde = { version = "1.0.137", features = ["derive"] }
 bincode = "1.1.3"
 rand = "0.8.4"
-cpal = "0.14.0"
-ringbuf = "0.2.8"
-byteorder = "1.4.3"
