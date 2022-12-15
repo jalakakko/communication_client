@@ -15,7 +15,6 @@ use std::sync::mpsc::Receiver;
 use std::sync::mpsc::TryRecvError;
 
 const CHAT_MAX_SIZE: usize = 10;
-//const ADDR: &str = "188.166.39.246";
 const ADDR: &str = "127.0.0.1";
 
 #[derive(Default, Debug)]
@@ -26,7 +25,6 @@ pub struct Client {
     connected_to: Channel,
     connection: Option<TcpStream>,
     chat_connection: Option<TcpStream>,
-    //signal_connection: Option<TcpStream>,
     username: String,
     channelpool: Vec<Channel>, 
     rx: Option<Receiver<String>>,
@@ -45,7 +43,6 @@ impl Client {
             },
             connection: None, 
             chat_connection: None,
-            //signal_connection: None,
             username: String::new(),
             channelpool: Vec::new(), 
             rx: None,
@@ -78,8 +75,6 @@ struct Message {
 
 #[derive(Default)]
 struct App {
-    //main_window_width: f32,
-    //main_window_height: f32,
     client: Client,
     chat_text: String,
     username_text: String,
@@ -126,7 +121,6 @@ impl eframe::App for App {
                 }
             }
 
-            //text fields
             self.username_text = self.client.username.clone();
             if !self.client.channelpool.is_empty() {
                 self.current_channel_text = self.client.channelpool[0].channel_name.clone();
@@ -141,7 +135,6 @@ impl eframe::App for App {
                     Err(TryRecvError::Empty) => { },
                     Err(TryRecvError::Disconnected) => panic!("Channel disconnected"),
                 } 
-                //sleep(Duration::from_millis(100));
             });
         };
         
@@ -162,24 +155,24 @@ impl eframe::App for App {
                         self.client.connection.as_ref().unwrap().write(&serialized).unwrap();
                         self.client.connection.as_ref().unwrap().flush().unwrap();
 
-                        //lukee uudet viestit
+                        // reads new messages
                         let mut buf = vec![0; 100000];
                         self.client.connection.as_ref().unwrap().read(&mut buf).unwrap();
                         let mut deserialized: Vec<Message> = bincode::deserialize(&buf).unwrap();
 
-                        //vertaa viimeisimpien viestejen id:itä ja että viestit ei ole None
                         if !deserialized.is_empty() {
                             if !self.client.connected_to.chat_msgs.as_ref().unwrap().is_empty() {
                                 if !deserialized.last().unwrap().id.contains (
                                 &self.client.connected_to.chat_msgs.as_ref().unwrap().last().unwrap().id) {
                                     self.client.connected_to.chat_msgs.as_mut().unwrap().append(&mut deserialized);
                                 } 
-                            } else  {
+                            }
+                            else {
                                 self.client.connected_to.chat_msgs.as_mut().unwrap().append(&mut deserialized);
                             }
                         }
 
-                        // poistaa vanhimman viestin
+                        // deletes oldest msg
                         if self.client.connected_to.chat_msgs.as_ref().unwrap().len() > CHAT_MAX_SIZE {
                             self.client.connected_to.chat_msgs.as_mut().unwrap().remove(0);
                         } 
@@ -430,9 +423,6 @@ impl eframe::App for App {
 }
 
 pub fn create_gui() {
-    // let mut conf = Ini::load_from_file("conf.ini").unwrap();
-    // let width: f32  = conf.with_section(Some("Window")).get("width").unwrap().parse().unwrap();
-    // let height: f32  = conf.with_section(Some("Window")).get("height").unwrap().parse().unwrap();
 
     let mut native_options = eframe::NativeOptions::default(); 
     native_options.initial_window_size = Some(Vec2 {x: 600.0, y: 500.0});
@@ -572,7 +562,7 @@ fn signal_server(stream: &mut TcpStream, signal: &str) {
     let mut writer = std::io::BufWriter::new(stream);
     let mut msg = String::from(signal);
     msg.push('\n');
-    sleep(Duration::from_millis(10));
+    sleep(Duration::from_millis(25));
     let msg = msg.as_bytes();
     writer.write(msg).expect("Cant write to server");
     writer.flush().unwrap();
